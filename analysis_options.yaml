@@ -1,0 +1,11 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  exclude:
+    - _legacy/**
+    - .dart_tool/**
+
+linter:
+  rules:
+    # Test files are numbered 01_..10_ to mirror TEST-01..10 docs.
+    file_names: false

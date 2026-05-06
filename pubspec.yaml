@@ -1,0 +1,39 @@
+name: flowbrain_core
+description: >
+  FlowBrain Core — Judgment & Knowledge core for the MakeMind ecosystem.
+  Two cooperating subsystems: Knowledge (5 facades over a 4-layer
+  Fact/Skill/Profile/Philosophy structure plus Ops) and Agent (worker /
+  manager / reviewer agents with 4-axis fork, conversation, growth tracking).
+version: 0.1.0
+homepage: https://app-appplayer.github.io/makemind
+repository: https://github.com/app-appplayer/flowbrain_core
+issue_tracker: https://github.com/app-appplayer/flowbrain_core/issues
+
+topics:
+  - knowledge
+  - agent
+  - mcp
+  - ai
+  - flowbrain
+
+environment:
+  sdk: ^3.0.0
+
+# FlowBrain's lib/ directly imports only two packages (mcp_knowledge and
+# mcp_bundle). Other knowledge packages (mcp_fact_graph/skill/profile/
+# philosophy/knowledge_ops) are transitive via mcp_knowledge.
+dependencies:
+  mcp_knowledge: ^0.2.1
+  mcp_bundle: ^0.3.1
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  web:
+  windows:
