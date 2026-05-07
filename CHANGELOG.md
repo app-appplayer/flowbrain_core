@@ -1,3 +1,13 @@
+## 0.1.1
+
+### Dependencies
+- `mcp_bundle: ^0.3.1` → `^0.3.2` — cascade alignment to pick up `McpBundle.factGraphSection` wire (additive — fact instance round-trip slot alongside the existing `factGraphSchema` type catalogue).
+- `mcp_knowledge: ^0.2.1` → `^0.2.2` — same cascade.
+
+No code changes in `flowbrain_core` itself.
+
+---
+
 ## 0.1.0
 
 Initial release.
