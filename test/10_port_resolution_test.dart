@@ -1,4 +1,4 @@
-/// TEST-10 — Port resolution (Knowledge 5 + Agent 1) — silent fallback 0건
+/// TEST-10 — Port resolution (Knowledge 5 + Agent 1) — zero silent fallbacks.
 library;
 
 import 'package:flowbrain_core/flowbrain_core.dart';

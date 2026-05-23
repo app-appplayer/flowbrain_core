@@ -1,3 +1,11 @@
+## 0.1.2
+
+### Changed (cascade)
+- `mcp_bundle` caret bumped from `^0.3.2` to `^0.4.0` (mcp_bundle 0.4.0 `UiSection.pages` spec realignment).
+- `mcp_knowledge` caret bumped from `^0.2.2` to `^0.2.3` (sibling cascade).
+
+flowbrain_core does not touch `UiSection.pages` directly — caret-only cascade. Consumers should bump to `^0.1.2`.
+
 ## 0.1.1
 
 ### Dependencies

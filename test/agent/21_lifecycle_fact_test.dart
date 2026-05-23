@@ -1,4 +1,4 @@
-/// TEST-21 — Agent lifecycle facts (자동 timeline 적재).
+/// TEST-21 — Agent lifecycle facts (timeline auto-recording).
 ///
 /// FR-FBCORE-AGT-080..088. 4 standard fact types:
 ///   - agent.fork.assigned
@@ -6,9 +6,11 @@
 ///   - agent.invoked
 ///   - agent.deleted
 ///
-/// `recordLifecycleAsFacts=true` (default) 시 위 4 lifecycle 이벤트가
-/// FactGraph 에 표준 schema 로 자동 적재. `entityId == agentId` 라
-/// `FactQuery(entityId: agentId)` 한 줄로 그 agent timeline 시간순 추출.
+/// When `recordLifecycleAsFacts=true` (the default), every one of the
+/// four lifecycle events above is recorded to the FactGraph using the
+/// standard fact schema. Because `entityId == agentId`, a single
+/// `FactQuery(entityId: agentId)` returns the agent's lifecycle
+/// timeline in chronological order.
 library;
 
 import 'package:flowbrain_core/flowbrain_core.dart';
@@ -192,7 +194,7 @@ void main() {
       expect(facts.first.content['kind'], equals('variation'));
     });
 
-    test('T-AGT-LF-006 — growthTracking 비활성이어도 fact 는 적재', () async {
+    test('T-AGT-LF-006 — facts are recorded even when growthTracking is off', () async {
       final system = _buildSystem(enableGrowthTracking: false);
       await system.agents.createAgent(
         id: 'editor',
