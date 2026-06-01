@@ -1,3 +1,11 @@
+## 0.1.3
+
+### Added
+- `AgentFacade.ask` / `AgentRuntime.ask` gain an optional `resetContext` flag (default `false`). When `true`, the agent's conversation history is cleared before the prompt is composed — for manager agents whose every turn should be treated fresh (bounds context growth, avoids stale prior-turn pollution that weakens the current directive). The post-ask turn is still appended; the reset is one-shot.
+
+### Changed (dependency floor)
+- `mcp_knowledge` `^0.2.3` → `^0.2.4` — raises the floor so the re-exported `OpsFacade` is guaranteed to carry the behavior-execution methods (`runBehavior` / `resumeBehavior` / `listBehaviors`, added in mcp_knowledge 0.2.4). flowbrain_core's own code is otherwise unchanged; this guarantees the capability for consumers (e.g. brain_kernel) that reach behavior through `system.ops`. Consumers should bump to `^0.1.3`.
+
 ## 0.1.2
 
 ### Changed (cascade)

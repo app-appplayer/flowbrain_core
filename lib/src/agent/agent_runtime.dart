@@ -86,15 +86,24 @@ class AgentRuntime {
   /// the new turn, emits `AgentInvokedEvent`. When [tools] is supplied the
   /// LLM may respond with structured tool invocations carried back in
   /// [AgentReply.toolCalls].
+  /// [resetContext] = true wipes the conversation history before
+  /// composing the prompt. Use for manager agents whose every turn
+  /// should be treated as fresh (avoids unbounded context growth +
+  /// stale prior-turn pollution that weakens current directive). The
+  /// post-ask turn is still appended — the reset is one-shot.
   Future<AgentReply> ask(
     String agentId,
     String message, {
     Map<String, Object?>? context,
     List<LlmTool>? tools,
+    bool resetContext = false,
   }) async {
     final agent = await _registry.get(agentId);
     if (agent == null) throw AgentNotFoundException(agentId);
 
+    if (resetContext) {
+      await _conversationStore.clear(agentId);
+    }
     final history = await _safeLoadHistory(agentId);
     final llm = _resolveLlmFor(agent.model);
 

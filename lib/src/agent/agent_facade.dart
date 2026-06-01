@@ -248,14 +248,26 @@ class AgentFacade {
 
   // ── Conversation ────────────────────────────────────────────────────────
 
+  /// [resetContext] = true wipes the conversation history before this
+  /// ask composes its prompt — useful for manager agents whose every
+  /// turn should be treated as fresh (avoids unbounded context growth
+  /// + stale prior-turn pollution that weakens current directive).
+  /// The post-ask turn is still appended; the reset is one-shot.
   Future<AgentReply> ask(
     String agentId,
     String message, {
     Map<String, Object?>? context,
     List<LlmTool>? tools,
+    bool resetContext = false,
   }) {
     _requireActivated();
-    return _runtime!.ask(agentId, message, context: context, tools: tools);
+    return _runtime!.ask(
+      agentId,
+      message,
+      context: context,
+      tools: tools,
+      resetContext: resetContext,
+    );
   }
 
   Stream<AgentToken> stream(
