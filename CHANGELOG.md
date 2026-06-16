@@ -1,3 +1,11 @@
+## 0.1.4 - 2026-06-14 - assigned facts compose into ask prompt
+
+### Changed (behavior — additive, no API change)
+- `AgentRuntime.ask` now composes the agent's **assigned facts** (set via `assignFacts` / `bk.agent.assign_facts`, stored under `AgentAxis.facts`) into the system prompt: base `systemPrompt` first, then an `## Assigned knowledge (facts)` section. Previously `ask` passed only the base `systemPrompt`, so assigned facts never reached the provider — a per-agent-knowledge-scoping gap (agent answered "I don't have that fact"). Facts are read from the agent's eager `OwnedFork` payload (handles live `OwnedFork` and persistent JSON `Map` forms), capped at 50 lines. No assigned facts → prompt identical to before (regression-safe). No public API change. Tests: `test/agent/22_assigned_facts_in_prompt_test.dart` (in-memory + **persistent JSON-KV round-trip**).
+
+### Changed (dependency floor)
+- `mcp_bundle` `^0.4.0` → `^0.4.3` — guarantees `FactRecord.toJson`/`fromJson`. Without it, assigned facts persisted via a *persistent* `KvStoragePort` serialize to `"Instance of 'FactRecord'"` (toString) and the compose above yields nothing — the fix only works end-to-end with serializable `FactRecord`. (In-memory KV worked regardless.)
+
 ## 0.1.3
 
 ### Added

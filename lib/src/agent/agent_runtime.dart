@@ -8,9 +8,10 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:mcp_bundle/mcp_bundle.dart'
-    show LlmPort, LlmRequest, LlmMessage, LlmTool;
+    show FactRecord, LlmPort, LlmRequest, LlmMessage, LlmTool;
 import 'package:mcp_knowledge/mcp_knowledge.dart' show KnowledgeEventBus;
 
 import '../system/knowledge_system.dart' show KnowledgeSystem;
@@ -107,9 +108,20 @@ class AgentRuntime {
     final history = await _safeLoadHistory(agentId);
     final llm = _resolveLlmFor(agent.model);
 
+    // Compose the agent's assigned knowledge (facts) into the system
+    // prompt so the provider actually sees it. Base persona first, then
+    // the assigned-knowledge section. No assigned facts → base only.
+    final assignedFacts = await _composeAssignedFacts(agentId);
+    final base = agent.systemPrompt;
+    final effectiveSystemPrompt = assignedFacts == null
+        ? base
+        : (base == null || base.isEmpty
+            ? assignedFacts
+            : '$base\n\n$assignedFacts');
+
     final stopwatch = Stopwatch()..start();
     final request = LlmRequest(
-      systemPrompt: agent.systemPrompt,
+      systemPrompt: effectiveSystemPrompt,
       messages: _buildMessages(history, message, context),
       model: agent.model.model,
       maxTokens: agent.model.maxTokens ?? _config.defaultModel?.maxTokens,
@@ -341,6 +353,68 @@ class AgentRuntime {
         'failed to load history for agent \'$agentId\': $e',
       );
     }
+  }
+
+  /// Max assigned facts rendered into a prompt (budget guard).
+  static const int _maxComposedFacts = 50;
+
+  /// Render the agent's assigned FACTS (set via `assignFacts`) into a
+  /// system-prompt section, or null when none are assigned.
+  ///
+  /// Facts are stored eager as `OwnedFork` envelopes under
+  /// [AgentAxis.facts]; in-memory KV surfaces the live `OwnedFork`
+  /// (payload = `List<FactRecord>`), persistent KV surfaces its JSON
+  /// (`{'payload': [ {fact json} ]}`). Both are handled.
+  Future<String?> _composeAssignedFacts(String agentId) async {
+    final refs = await _registry.listOwned(agentId, AgentAxis.facts);
+    if (refs.isEmpty) return null;
+    final lines = <String>[];
+    for (final ref in refs) {
+      final raw =
+          await _registry.getOwned(agentId, AgentAxis.facts, ref.forkedRef);
+      final payload = _ownedPayload(raw);
+      if (payload is! List) continue;
+      for (final fact in payload) {
+        final text = _factLine(fact);
+        if (text != null && text.isNotEmpty) lines.add('- $text');
+        if (lines.length >= _maxComposedFacts) break;
+      }
+      if (lines.length >= _maxComposedFacts) break;
+    }
+    if (lines.isEmpty) return null;
+    return <String>['## Assigned knowledge (facts)', ...lines].join('\n');
+  }
+
+  /// Extract the payload list from a stored owned envelope (live
+  /// `OwnedFork` or its JSON `Map`). Lazy envelopes have no resolved
+  /// payload here and yield null.
+  Object? _ownedPayload(Object? raw) {
+    if (raw is OwnedFork) return raw.payload;
+    if (raw is Map && raw['payload'] != null) return raw['payload'];
+    return null;
+  }
+
+  /// One readable line for a fact (live `FactRecord` or its JSON `Map`).
+  String? _factLine(Object? fact) {
+    if (fact is FactRecord) return _factText(fact.type, fact.content);
+    if (fact is Map) {
+      final content = fact['content'];
+      return _factText(
+        fact['type'] as String?,
+        content is Map ? content.cast<String, dynamic>() : null,
+      );
+    }
+    return null;
+  }
+
+  String? _factText(String? type, Map<String, dynamic>? content) {
+    if (content == null || content.isEmpty) return type;
+    final v = content['value'] ??
+        content['text'] ??
+        content['statement'] ??
+        content['body'];
+    final body = v is String && v.isNotEmpty ? v : jsonEncode(content);
+    return type != null && type.isNotEmpty ? '$type: $body' : body;
   }
 
   List<LlmMessage> _buildMessages(
