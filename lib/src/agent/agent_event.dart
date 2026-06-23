@@ -166,6 +166,38 @@ class ReviewerVerifiedEvent implements KnowledgeEvent {
   String get type => 'reviewer_verified';
 }
 
+/// `agent_fork_tension_detected` — emitted at the fork-evolution boundary
+/// (spec 12 §3) when the active Philosophy detects a tension between an
+/// agent's evolving non-philosophy axes (profile / knowledge / state) and
+/// the constitution. Philosophy is the only axis that *governs* the other
+/// three; this event surfaces the drift signal so a host can flag (or, at
+/// its own gate, hold) an evolution that would push the agent outside the
+/// constitution. Advisory — the runtime emits, it does not auto-revert.
+class AgentForkTensionDetectedEvent implements KnowledgeEvent {
+  const AgentForkTensionDetectedEvent({
+    required this.agentId,
+    required this.tensionCount,
+    required this.maxSeverity,
+    required this.timestamp,
+    this.descriptions = const <String>[],
+  });
+
+  final String agentId;
+  final int tensionCount;
+
+  /// Highest [TensionSeverity] name among the detected tensions.
+  final String maxSeverity;
+
+  /// Human-readable tension descriptions (capped by the emitter).
+  final List<String> descriptions;
+
+  @override
+  final DateTime timestamp;
+
+  @override
+  String get type => 'agent_fork_tension_detected';
+}
+
 /// `lazy_fork_materialized` — emitted by `ForkEngine.materialize` when a
 /// `LazyOwnedFork` (stored under `forkPolicy: ForkPolicy.copyOnWrite`)
 /// is converted into an eager `OwnedFork`. Hosts listen to track the

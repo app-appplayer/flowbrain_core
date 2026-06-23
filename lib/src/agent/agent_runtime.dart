@@ -11,7 +11,19 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:mcp_bundle/mcp_bundle.dart'
-    show FactRecord, LlmPort, LlmRequest, LlmMessage, LlmTool;
+    show
+        FactRecord,
+        FeedbackEvent,
+        FeedbackOutcome,
+        InterventionPoint,
+        LlmPort,
+        LlmRequest,
+        LlmMessage,
+        LlmTool,
+        MultiLayerContext,
+        PhilosophyEvaluationContext,
+        PipelineContext,
+        Tension;
 import 'package:mcp_knowledge/mcp_knowledge.dart' show KnowledgeEventBus;
 
 import '../system/knowledge_system.dart' show KnowledgeSystem;
@@ -108,16 +120,19 @@ class AgentRuntime {
     final history = await _safeLoadHistory(agentId);
     final llm = _resolveLlmFor(agent.model);
 
-    // Compose the agent's assigned knowledge (facts) into the system
-    // prompt so the provider actually sees it. Base persona first, then
-    // the assigned-knowledge section. No assigned facts → base only.
-    final assignedFacts = await _composeAssignedFacts(agentId);
+    // Compose the agent's assigned 4 axes (profile · philosophy · skill ·
+    // facts) into the system prompt so the provider actually sees them —
+    // profile/skill confine the agent to its specialty and philosophy
+    // surfaces its operating constitution (values/prohibitions) every turn
+    // (spec 12 §2). Base persona first, then the assigned-knowledge block.
+    // None assigned → base only.
+    final assignedKnowledge = await _composeAssignedAxes(agentId);
     final base = agent.systemPrompt;
-    final effectiveSystemPrompt = assignedFacts == null
+    final effectiveSystemPrompt = assignedKnowledge == null
         ? base
         : (base == null || base.isEmpty
-            ? assignedFacts
-            : '$base\n\n$assignedFacts');
+            ? assignedKnowledge
+            : '$base\n\n$assignedKnowledge');
 
     final stopwatch = Stopwatch()..start();
     final request = LlmRequest(
@@ -164,6 +179,21 @@ class AgentRuntime {
       thrown = e;
     } finally {
       stopwatch.stop();
+    }
+
+    // Philosophy work-time intervention (spec 12 §3): when the agent has an
+    // assigned philosophy, the constitution gates the output *before*
+    // delivery — a hard prohibition blocks the turn (not appended, surfaced
+    // to the caller), modifications adjust it. Opt-in: no assigned philosophy
+    // or no engine → skipped. Fails open on engine error so a philosophy
+    // hiccup never breaks an otherwise-good turn.
+    if (success) {
+      try {
+        content = await _interveneIfPhilosophy(agentId, content);
+      } on AgentPhilosophyBlockedException catch (e) {
+        success = false;
+        thrown = e;
+      }
     }
 
     final timestamp = DateTime.now();
@@ -332,7 +362,178 @@ class AgentRuntime {
       severity: result.severity,
       timestamp: DateTime.now(),
     ));
+
+    // §4 (outcome → knowledge): feed the review verdict back as a Philosophy
+    // FeedbackEvent so the constitution can *propose* an evolution. The
+    // proposal is human-gated and never auto-applied (the facade only emits
+    // an EvolutionProposedEvent). Opt-in (target agent has assigned
+    // philosophy + engine evolution enabled); fails open.
+    await _proposeFeedbackFromReview(targetReply.agentId, result);
+
+    // §4 (skill refinement): a deficient verdict is an outcome signal that
+    // the agent's procedure (skill) may need refinement — record a skill
+    // variation *candidate* (the existing human-gated accumulator).
+    await _proposeSkillRefinementFromReview(targetReply.agentId, result);
+
+    // §3 (Philosophy as drift-anchor): a review verdict is the outcome that
+    // drives a fork's non-philosophy axes to evolve. At that boundary, ask
+    // Philosophy to detect tensions between the agent's evolving state and
+    // the constitution so a drift signal is surfaced (event, not auto-revert).
+    await _detectForkTensions(targetReply.agentId);
+
     return result;
+  }
+
+  /// Turn a reviewer verdict into a Philosophy [FeedbackEvent] proposal
+  /// (spec 12 §4). No-op when the target has no assigned philosophy or the
+  /// engine is unavailable. Never throws into the caller (fail open).
+  Future<void> _proposeFeedbackFromReview(
+      String targetAgentId, ReviewResult result) async {
+    try {
+      final refs = await _registry.listOwned(targetAgentId, AgentAxis.philosophy);
+      if (refs.isEmpty) return;
+      final ks = _registry.knowledgeSystemRef();
+      if (ks is! KnowledgeSystem || !ks.philosophy.isAvailable) return;
+      final ethos = await ks.philosophy.getEthos();
+      final (outcome, score) = switch (result.verdict) {
+        ReviewVerdict.pass => (FeedbackOutcome.positive, 1.0),
+        ReviewVerdict.fail => (FeedbackOutcome.negative, 0.0),
+        ReviewVerdict.revise => (FeedbackOutcome.mixed, 0.5),
+      };
+      await ks.philosophy.proposeFeedback(FeedbackEvent(
+        id: 'feedback/$targetAgentId/${DateTime.now().microsecondsSinceEpoch}',
+        actionId: 'review:$targetAgentId',
+        ethosId: ethos.id,
+        outcome: outcome,
+        outcomeScore: score,
+        outcomeDescription: 'reviewer verdict: ${result.verdict.name}',
+        occurredAt: DateTime.now(),
+      ));
+    } catch (_) {
+      // Fail open — a feedback-proposal hiccup must not break review.
+    }
+  }
+
+  /// §4 skill-refinement path. A deficient review verdict (`fail` / `revise`)
+  /// is an outcome signal that the agent's procedure (skill) may need
+  /// refinement, so record a skill *variation candidate* per assigned skill
+  /// fork via [GrowthTracker.trackVariation] (`GrowthKind.variation` →
+  /// `skillCandidateCount`, the existing human-gated accumulator + FactGraph
+  /// timeline + `AgentForkEvolvedEvent`). A `pass` verdict means the skill
+  /// worked as-is → no candidate. Opt-in (target has an assigned skill);
+  /// never throws into the caller (fail open).
+  Future<void> _proposeSkillRefinementFromReview(
+      String targetAgentId, ReviewResult result) async {
+    if (result.verdict == ReviewVerdict.pass) return;
+    try {
+      final refs = await _registry.listOwned(targetAgentId, AgentAxis.skill);
+      for (final ref in refs) {
+        await _growthTracker.trackVariation(
+          agentId: targetAgentId,
+          forkedRef: ref.forkedRef,
+        );
+      }
+    } catch (_) {
+      // Fail open — a skill-refinement hiccup must not break review.
+    }
+  }
+
+  /// Detect tensions between an agent's evolving non-philosophy axes
+  /// (profile / knowledge / state) and the active constitution, at the
+  /// fork-evolution boundary (spec 12 §3 — Philosophy is the only axis that
+  /// governs the others). Opt-in: only agents with an assigned philosophy
+  /// are governed. Emits [AgentForkTensionDetectedEvent] when tensions are
+  /// found; never throws into the caller (fail open). No-op when the adapter
+  /// does not support `detectTensions`.
+  Future<void> _detectForkTensions(String agentId) async {
+    try {
+      final philoRefs = await _registry.listOwned(agentId, AgentAxis.philosophy);
+      if (philoRefs.isEmpty) return;
+      final ks = _registry.knowledgeSystemRef();
+      if (ks is! KnowledgeSystem || !ks.philosophy.isAvailable) return;
+
+      final profileState = await _axisStateMap(agentId, AgentAxis.profile);
+      final knowledgeProvenance = await _factsProvenance(agentId);
+      final tensions = await ks.philosophy.detectTensions(MultiLayerContext(
+        philosophyContext: PhilosophyEvaluationContext(
+          contextId: 'fork:$agentId',
+          profileState: profileState,
+        ),
+        profileState: profileState,
+        knowledgeProvenance: knowledgeProvenance,
+      ));
+      if (tensions.isEmpty) return;
+
+      _eventBus.emit(AgentForkTensionDetectedEvent(
+        agentId: agentId,
+        tensionCount: tensions.length,
+        maxSeverity: _maxTensionSeverity(tensions),
+        descriptions: tensions
+            .take(_maxComposedAxisItems)
+            .map((t) => t.description)
+            .toList(),
+        timestamp: DateTime.now(),
+      ));
+    } on UnsupportedError {
+      // Adapter does not implement detectTensions — nothing to do.
+    } catch (_) {
+      // Fail open — tension detection is advisory, never breaks review.
+    }
+  }
+
+  /// Merge an axis's assigned owned forks into a single state map (the
+  /// shape `detectTensions` reasons over). Empty map when none assigned.
+  Future<Map<String, dynamic>> _axisStateMap(
+      String agentId, AgentAxis axis) async {
+    final refs = await _registry.listOwned(agentId, axis);
+    final state = <String, dynamic>{};
+    for (final ref in refs) {
+      final raw = await _registry.getOwned(agentId, axis, ref.forkedRef);
+      final map = _payloadMap(_ownedPayload(raw));
+      if (map != null) state.addAll(map);
+    }
+    return state;
+  }
+
+  /// Derive a knowledge-provenance signal from the agent's assigned facts —
+  /// record count + average confidence — so the tension detector reasons
+  /// over real signals rather than a placeholder.
+  Future<Map<String, dynamic>> _factsProvenance(String agentId) async {
+    final refs = await _registry.listOwned(agentId, AgentAxis.facts);
+    var count = 0;
+    var confidenceSum = 0.0;
+    var confidenceN = 0;
+    for (final ref in refs) {
+      final payload =
+          _ownedPayload(await _registry.getOwned(agentId, AgentAxis.facts, ref.forkedRef));
+      if (payload is! List) continue;
+      for (final fact in payload) {
+        count++;
+        final c = fact is FactRecord
+            ? fact.confidence
+            : (fact is Map ? (fact['confidence'] as num?)?.toDouble() : null);
+        if (c != null) {
+          confidenceSum += c;
+          confidenceN++;
+        }
+      }
+    }
+    return <String, dynamic>{
+      'record_count': count,
+      if (confidenceN > 0) 'trust_score': confidenceSum / confidenceN,
+    };
+  }
+
+  /// Highest [TensionSeverity] name among [tensions] (critical > high >
+  /// medium > low). Returns `unknown` when the list is empty.
+  String _maxTensionSeverity(List<Tension> tensions) {
+    const order = <String>['unknown', 'low', 'medium', 'high', 'critical'];
+    var best = 'unknown';
+    for (final t in tensions) {
+      final name = t.severity.name;
+      if (order.indexOf(name) > order.indexOf(best)) best = name;
+    }
+    return best;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -415,6 +616,125 @@ class AgentRuntime {
         content['body'];
     final body = v is String && v.isNotEmpty ? v : jsonEncode(content);
     return type != null && type.isNotEmpty ? '$type: $body' : body;
+  }
+
+  /// Max items rendered per non-facts axis (budget guard).
+  static const int _maxComposedAxisItems = 20;
+
+  /// Compose all 4 assigned axes into one system-prompt block, or null when
+  /// none are assigned. Order: profile (persona) → philosophy (guardrails)
+  /// → skill → facts. (spec 12 §2.)
+  Future<String?> _composeAssignedAxes(String agentId) async {
+    final sections = <String>[];
+    final profile = await _composeAxis(
+        agentId, AgentAxis.profile, 'Profile (persona / role)');
+    if (profile != null) sections.add(profile);
+    final philosophy = await _composeAxis(agentId, AgentAxis.philosophy,
+        'Operating philosophy (values · prohibitions)');
+    if (philosophy != null) sections.add(philosophy);
+    final skill = await _composeAxis(agentId, AgentAxis.skill, 'Assigned skills');
+    if (skill != null) sections.add(skill);
+    final facts = await _composeAssignedFacts(agentId);
+    if (facts != null) sections.add(facts);
+    if (sections.isEmpty) return null;
+    return sections.join('\n\n');
+  }
+
+  /// Render a non-facts axis's assigned owned forks into a labeled section.
+  /// The payload is generic (a live domain object exposing `toJson`, or its
+  /// JSON `Map`) — rendered defensively from readable fields so no hidden
+  /// Knowledge-Subsystem domain type is imported here.
+  Future<String?> _composeAxis(
+      String agentId, AgentAxis axis, String label) async {
+    final refs = await _registry.listOwned(agentId, axis);
+    if (refs.isEmpty) return null;
+    final lines = <String>[];
+    for (final ref in refs) {
+      final raw = await _registry.getOwned(agentId, axis, ref.forkedRef);
+      final payload = _ownedPayload(raw);
+      final text = _axisLine(payload) ?? ref.forkedRef;
+      if (text.isNotEmpty) lines.add('- $text');
+      if (lines.length >= _maxComposedAxisItems) break;
+    }
+    if (lines.isEmpty) return null;
+    return <String>['## $label', ...lines].join('\n');
+  }
+
+  /// Best-effort one-line summary of a non-facts axis payload.
+  String? _axisLine(Object? payload) {
+    final map = _payloadMap(payload);
+    if (map == null) return payload?.toString();
+    final name = map['name'] ?? map['title'] ?? map['id'];
+    final desc = map['description'] ??
+        map['summary'] ??
+        map['statement'] ??
+        map['persona'] ??
+        map['role'];
+    final values = map['values'] ?? map['valuePriorities'];
+    final prohibitions = map['prohibitions'];
+    final parts = <String>[];
+    if (name is String && name.isNotEmpty) parts.add(name);
+    if (desc is String && desc.isNotEmpty) parts.add(desc);
+    if (values != null) parts.add('values: ${_compact(values)}');
+    if (prohibitions != null) parts.add('prohibitions: ${_compact(prohibitions)}');
+    if (parts.isEmpty) return _compact(map);
+    return parts.join(' — ');
+  }
+
+  /// Coerce a payload to a JSON map — directly if a `Map`, else via a
+  /// best-effort `toJson()`. Returns null when neither applies.
+  Map<String, dynamic>? _payloadMap(Object? payload) {
+    if (payload is Map) return payload.cast<String, dynamic>();
+    try {
+      final json = (payload as dynamic).toJson();
+      if (json is Map) return json.cast<String, dynamic>();
+    } catch (_) {
+      // Payload has no toJson — fall through to null (caller uses toString).
+    }
+    return null;
+  }
+
+  /// Compact, length-capped JSON for embedding a value in a prompt line.
+  String _compact(Object? value) {
+    final s = jsonEncode(value);
+    return s.length > 200 ? '${s.substring(0, 200)}…' : s;
+  }
+
+  /// Apply the agent's assigned Philosophy to a generated output before
+  /// delivery (spec 12 §3). No assigned philosophy or unavailable engine →
+  /// returns [content] unchanged. A hard prohibition throws
+  /// [AgentPhilosophyBlockedException]; soft modifications adjust the text.
+  /// Fails open (returns [content]) on any engine error — a philosophy
+  /// hiccup must not break an otherwise-good turn.
+  Future<String> _interveneIfPhilosophy(String agentId, String content) async {
+    final refs = await _registry.listOwned(agentId, AgentAxis.philosophy);
+    if (refs.isEmpty) return content;
+    final ks = _registry.knowledgeSystemRef();
+    if (ks is! KnowledgeSystem) return content;
+    if (!ks.philosophy.isAvailable) return content;
+    try {
+      final result = await ks.philosophy.intervene(
+        InterventionPoint.postGeneration,
+        PipelineContext(
+          pipelineId: agentId,
+          currentPoint: InterventionPoint.postGeneration,
+          knowledgeRetrieved: const <String, dynamic>{},
+          generatedOutput: content,
+        ),
+      );
+      if (result.blocksDelivery) {
+        throw AgentPhilosophyBlockedException(
+          agentId: agentId,
+          violationIds: result.prohibitionViolationIds,
+        );
+      }
+      final adjusted = result.modifications?['output'];
+      return adjusted is String && adjusted.isNotEmpty ? adjusted : content;
+    } on AgentPhilosophyBlockedException {
+      rethrow;
+    } catch (_) {
+      return content;
+    }
   }
 
   List<LlmMessage> _buildMessages(

@@ -53,6 +53,24 @@ class ConversationStoreUnavailableException implements Exception {
       'or use InfraPorts.inMemory() for tests)';
 }
 
+/// Thrown when the agent's assigned Philosophy blocks a generated output at
+/// work-time (hard prohibition violated), so the turn is not delivered
+/// (spec `platform/12-flowbrain-runtime.md` §3).
+class AgentPhilosophyBlockedException implements Exception {
+  const AgentPhilosophyBlockedException({
+    required this.agentId,
+    this.violationIds = const [],
+  });
+
+  final String agentId;
+  final List<String> violationIds;
+
+  @override
+  String toString() =>
+      'AgentPhilosophyBlockedException: agent \'$agentId\' output blocked by '
+      'philosophy${violationIds.isEmpty ? '' : ' (prohibitions: ${violationIds.join(', ')})'}';
+}
+
 /// Thrown when `route()` is called on a non-manager agent or `review()` on a
 /// non-reviewer agent (FR-FBCORE-AGT-073).
 class AgentRoleMismatchException implements Exception {
