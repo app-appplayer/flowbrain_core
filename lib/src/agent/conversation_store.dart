@@ -42,6 +42,13 @@ class ConversationStore {
   Timer? _ttlTimer;
   bool _closed = false;
 
+  /// Per-agentId serialization tails. A mutating op (`append` / `clear`)
+  /// chains after the agent's current tail so concurrent same-agent calls
+  /// run strictly in order — preventing the non-atomic read-modify-write in
+  /// `append` from interleaving and losing a turn (FR-FBCORE-AGT-030..034).
+  /// Different agentIds keep separate tails → cross-agent calls stay parallel.
+  final Map<String, Future<void>> _tails = <String, Future<void>>{};
+
   /// Fixed sweep interval — independent of TTL itself. One hour is a balance
   /// between timely cleanup and storage pressure.
   static const Duration _ttlSweepInterval = Duration(hours: 1);
@@ -78,24 +85,28 @@ class ConversationStore {
   }
 
   /// Append a turn, then compress if `maxConversationTurns` is exceeded.
-  Future<void> append(String agentId, ConversationTurn turn) async {
+  Future<void> append(String agentId, ConversationTurn turn) {
     _ensureOpen();
-    final existing = await load(agentId, limit: -1);
-    final next = [...existing, turn];
-    final cap = _config.maxConversationTurns;
-    final compacted = (cap > 0 && next.length > cap)
-        ? _compressOldest(next, cap)
-        : next;
-    await _kv.set(_turnsKey(agentId),
-        jsonEncode(compacted.map((t) => t.toJson()).toList()));
-    await _kv.set(_lastAtKey(agentId), turn.timestamp.toIso8601String());
+    return _serialize(agentId, () async {
+      final existing = await load(agentId, limit: -1);
+      final next = [...existing, turn];
+      final cap = _config.maxConversationTurns;
+      final compacted = (cap > 0 && next.length > cap)
+          ? _compressOldest(next, cap)
+          : next;
+      await _kv.set(_turnsKey(agentId),
+          jsonEncode(compacted.map((t) => t.toJson()).toList()));
+      await _kv.set(_lastAtKey(agentId), turn.timestamp.toIso8601String());
+    });
   }
 
-  Future<void> clear(String agentId) async {
+  Future<void> clear(String agentId) {
     _ensureOpen();
-    await _kv.remove(_turnsKey(agentId));
-    await _kv.remove(_lastAtKey(agentId));
-    await _kv.remove(_summaryKey(agentId));
+    return _serialize(agentId, () async {
+      await _kv.remove(_turnsKey(agentId));
+      await _kv.remove(_lastAtKey(agentId));
+      await _kv.remove(_summaryKey(agentId));
+    });
   }
 
   /// Remove all conversation traces for a deleted agent. Safe to call even
@@ -121,6 +132,26 @@ class ConversationStore {
   Future<void> debugSweepNow() => _sweepExpired();
 
   // ── Internal ────────────────────────────────────────────────────────────
+
+  /// Run [task] after the agent's current tail completes, then publish a new
+  /// tail. Same-agentId ops run strictly serially; different agentIds run in
+  /// parallel. The tail always completes successfully — a task's error surfaces
+  /// to its own caller but never poisons the chain, so the next op still runs.
+  /// The map entry is removed once no op is chained behind it (bounded growth).
+  Future<void> _serialize(String agentId, Future<void> Function() task) async {
+    final prior = _tails[agentId];
+    final done = Completer<void>();
+    _tails[agentId] = done.future;
+    try {
+      if (prior != null) await prior;
+      await task();
+    } finally {
+      if (identical(_tails[agentId], done.future)) {
+        _tails.remove(agentId);
+      }
+      done.complete();
+    }
+  }
 
   void _ensureOpen() {
     if (_closed) {

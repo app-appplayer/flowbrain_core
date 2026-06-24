@@ -4,7 +4,7 @@ description: >
   Two cooperating subsystems: Knowledge (5 facades over a 4-layer
   Fact/Skill/Profile/Philosophy structure plus Ops) and Agent (worker /
   manager / reviewer agents with 4-axis fork, conversation, growth tracking).
-version: 0.1.5
+version: 0.1.6
 homepage: https://app-appplayer.github.io/makemind
 repository: https://github.com/app-appplayer/flowbrain_core
 issue_tracker: https://github.com/app-appplayer/flowbrain_core/issues

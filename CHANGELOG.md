@@ -1,3 +1,11 @@
+## 0.1.6 - 2026-06-24 - ConversationStore per-agent append atomicity (additive)
+
+### Fixed
+- **`ConversationStore.append` is now atomic per agentId.** `append` was a non-atomic read-modify-write (`load` → `[...existing, turn]` → `_kv.set`); two concurrent `agents.ask` calls for the *same* agent could read the same history, each append its own turn, and the last `set` win — silently dropping a turn (the agent then "forgets" the lost request). A per-agentId serialization tail now chains mutating ops (`append`, and `clear` so append↔clear/TTL-sweep can't interleave either) so same-agent calls run strictly in order; different agentIds stay parallel. The tail always completes successfully (a failed op surfaces to its caller but never blocks the next) and its map entry is dropped when nothing is chained behind it (bounded growth). Regression: `test/agent/14_conversation_store_test.dart` (25 concurrent same-agent appends preserve all 25 · two agents stay isolated) — both fail without the serialization.
+
+### Backward compatibility
+- Fully additive. No API or signature change — `append` / `clear` / `remove` keep their shapes; only concurrent-call ordering is now guaranteed.
+
 ## 0.1.5 - 2026-06-23 - FlowBrain runtime wiring (spec 12 §2·§3·§3b·§4·§4b)
 
 ### Changed (behavior — additive, no API change)
