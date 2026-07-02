@@ -98,6 +98,7 @@ class AgentFacade {
   Future<Agent> updateAgent(
     String agentId, {
     String? displayName,
+    AgentRole? role,
     ModelSpec? model,
     String? systemPrompt,
     Map<String, String>? tags,
@@ -106,6 +107,7 @@ class AgentFacade {
     return _registry!.update(
       agentId,
       displayName: displayName,
+      role: role,
       model: model,
       systemPrompt: systemPrompt,
       tags: tags,

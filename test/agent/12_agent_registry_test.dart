@@ -43,6 +43,35 @@ void main() {
       expect(deleted, equals(['a']));
     });
 
+    test(
+        'T-AGT-REG-008 — update(role:) changes orchestration role in place '
+        '(no delete/recreate), other fields and omissions preserved', () async {
+      final system = KnowledgeSystem.withAgents();
+      await system.agents.createAgent(
+        id: 'a',
+        displayName: 'Nora',
+        model: ModelSpec.stub(),
+        workspaceId: 'w1',
+        role: AgentRole.worker,
+      );
+
+      // Promote worker -> reviewer without destroying the individual.
+      final promoted =
+          await system.agents.updateAgent('a', role: AgentRole.reviewer);
+      expect(promoted.role, equals(AgentRole.reviewer));
+      expect(promoted.displayName, equals('Nora')); // untouched field kept
+
+      // Persisted, not just returned.
+      final got = await system.agents.getAgent('a');
+      expect(got!.role, equals(AgentRole.reviewer));
+
+      // Omitting role leaves it unchanged.
+      final renamed =
+          await system.agents.updateAgent('a', displayName: 'Nora 2');
+      expect(renamed.role, equals(AgentRole.reviewer));
+      expect(renamed.displayName, equals('Nora 2'));
+    });
+
     test('T-AGT-REG-002 — duplicate id throws StateError', () async {
       final system = KnowledgeSystem.withAgents();
       await system.agents.createAgent(

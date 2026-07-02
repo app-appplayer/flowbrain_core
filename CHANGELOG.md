@@ -1,3 +1,8 @@
+## 0.1.7 - 2026-07-02 - Agent role update seam (additive)
+
+### Added
+- **`AgentRegistry.update` / `AgentFacade.updateAgent` accept `AgentRole? role`.** An agent's orchestration role (`worker` / `manager` / `reviewer`) can now be changed in place. Previously the only path was delete → recreate, which destroys the individual (owned axis forks, history, accumulated expertise) — contradicting the persistent-roster principle. The model was already designed for this (`Agent.copyWith(role:)`); only the update surfaces omitted the parameter. Safe by construction: every role consumer checks live at use time (`AgentRuntime.route`/`review` validate `manager`/`reviewer` on each dispatch), so no role-derived state exists to invalidate. Optional named parameter — existing callers unaffected. Regression: `test/agent/12_agent_registry_test.dart` T-AGT-REG-008 (in-place promote persists · untouched fields kept · omitting `role` leaves it unchanged). **153 PASS · analyze 0.**
+
 ## 0.1.6 - 2026-06-24 - ConversationStore per-agent append atomicity (additive)
 
 ### Fixed

@@ -156,6 +156,7 @@ class AgentRegistry {
   Future<Agent> update(
     String agentId, {
     String? displayName,
+    AgentRole? role,
     ModelSpec? model,
     String? systemPrompt,
     Map<String, String>? tags,
@@ -164,6 +165,7 @@ class AgentRegistry {
     if (current == null) throw AgentNotFoundException(agentId);
     final next = current.copyWith(
       displayName: displayName,
+      role: role,
       model: model,
       systemPrompt: systemPrompt,
       tags: tags,
