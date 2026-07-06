@@ -604,23 +604,21 @@ class RoutingDecision {
     reason: 'parse_error',
   );
 
-  /// Try to parse a JSON object from raw LLM content. Returns
-  /// [parseError] when parsing fails.
+  /// Try to parse a JSON object from raw LLM content. Tolerates a Markdown
+  /// code fence, a prose preamble, and trailing commentary around the object
+  /// (long prompts make the model wrap or annotate its JSON). Returns
+  /// [parseError] when no valid object can be recovered.
   factory RoutingDecision.tryParse(String raw) {
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return parseError;
-      final target = decoded['targetAgentId'];
-      final confidence = decoded['confidence'];
-      if (target is! String || confidence is! num) return parseError;
-      return RoutingDecision(
-        targetAgentId: target,
-        confidence: confidence.toDouble(),
-        reason: decoded['reason'] as String?,
-      );
-    } catch (_) {
-      return parseError;
-    }
+    final decoded = extractJsonMap(raw);
+    if (decoded == null) return parseError;
+    final target = decoded['targetAgentId'];
+    final confidence = decoded['confidence'];
+    if (target is! String || confidence is! num) return parseError;
+    return RoutingDecision(
+      targetAgentId: target,
+      confidence: confidence.toDouble(),
+      reason: decoded['reason'] as String?,
+    );
   }
 }
 
@@ -643,9 +641,9 @@ class ReviewResult {
   );
 
   factory ReviewResult.tryParse(String raw) {
+    final decoded = extractJsonMap(raw);
+    if (decoded == null) return parseError;
     try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return parseError;
       final verdictRaw = decoded['verdict'];
       if (verdictRaw is! String) return parseError;
       final verdict = ReviewVerdict.values.byName(verdictRaw);
@@ -661,5 +659,44 @@ class ReviewResult {
     } catch (_) {
       return parseError;
     }
+  }
+}
+
+/// Best-effort extraction of a JSON object from raw LLM output. Tolerates a
+/// Markdown code fence (```json … ``` or ``` … ```), a prose preamble, and
+/// trailing commentary that models tend to add around their JSON — especially
+/// on long prompts. Strategy: strip a fenced block if present, try a direct
+/// decode, then fall back to the first `{` … last `}` substring. Returns null
+/// if no JSON object can be recovered.
+Map<String, dynamic>? extractJsonMap(String raw) {
+  var s = raw.trim();
+
+  // 1. Unwrap a Markdown code fence if the output is wrapped in one.
+  final fence = RegExp(
+    r'```(?:json)?\s*([\s\S]*?)\s*```',
+    caseSensitive: false,
+  ).firstMatch(s);
+  if (fence != null) s = fence.group(1)!.trim();
+
+  // 2. Direct decode (bare JSON, the common short-prompt case).
+  final direct = _decodeMap(s);
+  if (direct != null) return direct;
+
+  // 3. Extract the outermost object: first '{' to last '}'.
+  final start = s.indexOf('{');
+  final end = s.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    final sub = _decodeMap(s.substring(start, end + 1));
+    if (sub != null) return sub;
+  }
+  return null;
+}
+
+Map<String, dynamic>? _decodeMap(String s) {
+  try {
+    final decoded = jsonDecode(s);
+    return decoded is Map ? decoded.cast<String, dynamic>() : null;
+  } catch (_) {
+    return null;
   }
 }

@@ -1,3 +1,11 @@
+## 0.1.8 - 2026-07-04 - Tolerant routing / review JSON parsing (additive fix)
+
+### Fixed
+- **`RoutingDecision.tryParse` / `ReviewResult.tryParse` now recover the JSON object from decorated LLM output.** Both did a single strict `jsonDecode(raw)` over the *entire* model response and silently returned `parse_error` on any failure. Short prompts got bare JSON and passed; **long requests (~1.4KB)** made the model wrap its answer in a Markdown code fence (```` ```json ````), add a prose preamble, or append trailing reasoning — so `jsonDecode` threw and `agent_route` silently broke (`targetAgentId: ''`, confidence 0.0, delegation lost). Parsing is now tolerant via a shared `extractJsonMap`: strip a code fence if present → try a direct decode → fall back to the outermost `{` … `}` substring; genuinely object-free output still returns `parse_error`. Both parsers share the helper (the reviewer path had the identical vulnerability). Reported from live operation (konpi field defect D5); root cause confirmed at `agent_models.dart` `tryParse`, byte-identical across 0.1.4→0.1.7. Regression: `test/agent/17_unit_coverage_test.dart` (fenced / bare-fence / prose-preamble+trailer / no-object cases for routing, fenced+prose for review). **155 PASS · analyze 0.**
+
+### Backward compatibility
+- Fully additive. No API or signature change — strictly more inputs now parse; every input that parsed before still parses identically. `extractJsonMap` is exported for reuse.
+
 ## 0.1.7 - 2026-07-02 - Agent role update seam (additive)
 
 ### Added

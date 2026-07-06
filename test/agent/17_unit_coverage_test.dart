@@ -358,6 +358,41 @@ void main() {
           equals('parse_error'));
     });
 
+    test('RoutingDecision.tryParse tolerates fences, preamble and trailer', () {
+      // Fenced code block (```json … ```) — the long-prompt failure mode.
+      final fenced = RoutingDecision.tryParse(
+          'Sure, here is the routing decision:\n\n'
+          '```json\n{"targetAgentId":"han","confidence":0.9}\n```\n\n'
+          'I chose han because the request is about editing.');
+      expect(fenced.targetAgentId, equals('han'));
+      expect(fenced.confidence, equals(0.9));
+
+      // Bare fence without a language tag.
+      final barefence = RoutingDecision.tryParse(
+          '```\n{"targetAgentId":"a","confidence":0.5}\n```');
+      expect(barefence.targetAgentId, equals('a'));
+
+      // Prose preamble + trailing reasoning, no fence.
+      final prose = RoutingDecision.tryParse(
+          'The best agent is: {"targetAgentId":"b","confidence":0.8} '
+          'since it matches the topic.');
+      expect(prose.targetAgentId, equals('b'));
+      expect(prose.confidence, equals(0.8));
+
+      // Genuinely no object → still parse_error.
+      expect(RoutingDecision.tryParse('no json here at all').reason,
+          equals('parse_error'));
+    });
+
+    test('ReviewResult.tryParse tolerates fences and surrounding prose', () {
+      final r = ReviewResult.tryParse(
+          'Here is my review:\n```json\n'
+          '{"verdict":"pass","severity":"low","comments":"ok"}\n```');
+      expect(r.verdict, equals(ReviewVerdict.pass));
+      expect(r.severity, equals(ReviewSeverity.low));
+      expect(r.comments, equals('ok'));
+    });
+
     test('ReviewResult.tryParse success case', () {
       final result = ReviewResult.tryParse(
           '{"verdict":"revise","severity":"medium","comments":"more"}');
