@@ -63,6 +63,16 @@ class KnowledgeConfig {
   /// Default preset.
   static KnowledgeConfig get defaults => KnowledgeConfig();
 
+  /// The defaults with philosophy evolution switched on. The stock default
+  /// leaves it off, which makes `PhilosophyFacade.proposeFeedback` answer
+  /// null for every review — so no proposal was ever made. Proposals are
+  /// still applied only by a person (platform spec 12 §4).
+  static KnowledgeConfig get withPhilosophyEvolution => KnowledgeConfig(
+        knowledgeConfig: const mcp.KnowledgeConfig(
+          philosophy: mcp.PhilosophyConfig(enableEvolution: true),
+        ),
+      );
+
   /// Development preset — debug logs, growth tracking, shorter conversation
   /// TTL.
   static KnowledgeConfig get development => KnowledgeConfig(

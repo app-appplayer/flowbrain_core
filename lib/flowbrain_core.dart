@@ -68,6 +68,12 @@ export 'src/agent/agent_lifecycle_fact.dart';
 // ============================================================================
 
 // ============================================================================
+// L0 runtime type — surfaced so a host can build a FactGraphRuntime over its
+// own storage (a durable one) and hand it to the kernel boot.
+// ============================================================================
+export 'package:mcp_knowledge/mcp_knowledge.dart' show FactGraphRuntime;
+
+// ============================================================================
 // Philosophy domain helper types — surfaced for host-side error handling
 // and guidance inspection.
 // ============================================================================
@@ -111,6 +117,8 @@ export 'package:mcp_knowledge/mcp_knowledge.dart'
         // Philosophy pillar (L3)
         PhilosophyEngine,
         KvEthosStoreAdapter,
+        KvFeedbackHistoryStore,
+        KvProposalStore,
         DefaultEthosSeeder,
         Ethos,
         EthosScope,

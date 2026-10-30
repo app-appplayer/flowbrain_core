@@ -1,3 +1,15 @@
+## 0.1.9 - 2026-10-31 - Durable fact graph seam and philosophy evolution on (additive)
+
+### Added
+- `FactGraphRuntime`, `KvFeedbackHistoryStore` and `KvProposalStore` are re-exported, so a host can hand the kernel a fact graph over its own durable storage and keep philosophy feedback history and proposals in a key/value store.
+- `KnowledgeConfig.withPhilosophyEvolution` — the defaults with philosophy evolution switched on. The stock default leaves it off, so `PhilosophyFacade.proposeFeedback` answers null for every review; the kernel now boots with this one. Proposals are still applied only by a person.
+
+### Changed
+- `mcp_knowledge` `^0.2.5` → `^0.2.6` and `mcp_bundle` `^0.4.4` → `^0.4.12`: the floors that carry the durable-store seam, the bounded philosophy feedback history and the skill runtime changes.
+
+### Backward compatibility
+- Additive. `dart-apitool` against 0.1.8: no breaking changes.
+
 ## 0.1.8 - 2026-07-04 - Tolerant routing / review JSON parsing (additive fix)
 
 ### Fixed
