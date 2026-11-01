@@ -265,6 +265,29 @@ class KvIndexCorruptionEvent implements KnowledgeEvent {
 /// `system.facts.writeFacts(...)` throws. The agent operation itself
 /// (storeOwned / delete / record / ask) still completes — the event is
 /// purely observability for diagnosing FactGraph adapter issues.
+/// `agent_output_failed` — an agent's output could not be put down through
+/// the host's output port. The agent's answer was still delivered.
+class AgentOutputFailedEvent implements KnowledgeEvent {
+  const AgentOutputFailedEvent({
+    required this.agentId,
+    required this.kind,
+    required this.error,
+    required this.timestamp,
+  });
+
+  final String agentId;
+
+  /// `ask` · `review` · `route`.
+  final String kind;
+  final String error;
+
+  @override
+  final DateTime timestamp;
+
+  @override
+  String get type => 'agent_output_failed';
+}
+
 class AgentLifecycleFactFailedEvent implements KnowledgeEvent {
   const AgentLifecycleFactFailedEvent({
     required this.agentId,

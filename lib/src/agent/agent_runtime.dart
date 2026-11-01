@@ -32,6 +32,7 @@ import 'agent_event.dart';
 import 'agent_exception.dart';
 import 'agent_lifecycle_fact.dart';
 import 'agent_models.dart';
+import 'agent_ports.dart';
 import 'agent_registry.dart';
 import 'conversation_store.dart';
 import 'fork_engine.dart';
@@ -51,6 +52,8 @@ class AgentRuntime {
     GrowthTracker? growthTracker,
     ManagerRouter managerRouter = const ManagerRouter(),
     ReviewerEngine reviewerEngine = const ReviewerEngine(),
+    AgentContextPort? contextPort,
+    AgentOutputPort? outputPort,
   })  : _registry = registry,
         _conversationStore = conversationStore,
         // ignore: unused_field
@@ -62,7 +65,9 @@ class AgentRuntime {
         _growthTracker =
             growthTracker ?? GrowthTracker(registry: registry, config: config),
         _managerRouter = managerRouter,
-        _reviewerEngine = reviewerEngine;
+        _reviewerEngine = reviewerEngine,
+        _contextPort = contextPort,
+        _outputPort = outputPort;
 
   final AgentRegistry _registry;
   final ConversationStore _conversationStore;
@@ -74,6 +79,8 @@ class AgentRuntime {
   final GrowthTracker _growthTracker;
   final ManagerRouter _managerRouter;
   final ReviewerEngine _reviewerEngine;
+  final AgentContextPort? _contextPort;
+  final AgentOutputPort? _outputPort;
 
   AgentRegistry get registry => _registry;
   ConversationStore get conversationStore => _conversationStore;
@@ -110,6 +117,8 @@ class AgentRuntime {
     Map<String, Object?>? context,
     List<LlmTool>? tools,
     bool resetContext = false,
+    DateTime? asOf,
+    Map<String, Object?>? recordExtra,
   }) async {
     final agent = await _registry.get(agentId);
     if (agent == null) throw AgentNotFoundException(agentId);
@@ -126,13 +135,23 @@ class AgentRuntime {
     // surfaces its operating constitution (values/prohibitions) every turn
     // (spec 12 §2). Base persona first, then the assigned-knowledge block.
     // None assigned → base only.
-    final assignedKnowledge = await _composeAssignedAxes(agentId);
-    final base = agent.systemPrompt;
-    final effectiveSystemPrompt = assignedKnowledge == null
-        ? base
-        : (base == null || base.isEmpty
-            ? assignedKnowledge
-            : '$base\n\n$assignedKnowledge');
+    final readFactIds = <String>[];
+    var effectiveSystemPrompt = await _systemPromptWithAxes(
+        agentId, agent.systemPrompt,
+        factIds: readFactIds);
+    // What the host's store holds for this request (spec 30 §5.1): a reset
+    // agent picks its work up here. A store that cannot answer fails the
+    // call — answering without the state it was given would be wrong
+    // silently.
+    final stored = await _contextPort?.contextFor(agentId, message,
+        workspaceId: agent.workspaceId, asOf: asOf);
+    if (stored != null && stored.text.trim().isNotEmpty) {
+      final base = effectiveSystemPrompt;
+      effectiveSystemPrompt = base == null || base.isEmpty
+          ? stored.text
+          : '$base\n\n${stored.text}';
+      readFactIds.addAll(stored.factIds);
+    }
 
     final stopwatch = Stopwatch()..start();
     final request = LlmRequest(
@@ -140,8 +159,7 @@ class AgentRuntime {
       messages: _buildMessages(history, message, context),
       model: agent.model.model,
       maxTokens: agent.model.maxTokens ?? _config.defaultModel?.maxTokens,
-      temperature:
-          agent.model.temperature ?? _config.defaultModel?.temperature,
+      temperature: agent.model.temperature ?? _config.defaultModel?.temperature,
       tools: tools,
     );
 
@@ -249,6 +267,25 @@ class AgentRuntime {
       throw thrown;
     }
 
+    if (content.isNotEmpty) {
+      await _recordOutput(AgentOutput(
+        workspaceId: agent.workspaceId,
+        flow: FlowStepRef.current,
+        kind: 'ask',
+        agentId: agentId,
+        request: message,
+        content: content,
+        model: agent.model.model,
+        at: timestamp,
+        lens: await _lensOf(agentId),
+        factIds: readFactIds,
+        extra: <String, Object?>{
+          if (asOf != null) 'asOf': asOf.toUtc().toIso8601String(),
+          ...?recordExtra,
+        },
+      ));
+    }
+
     return AgentReply(
       id: '',
       agentId: agentId,
@@ -270,8 +307,7 @@ class AgentRuntime {
     Map<String, Object?>? context,
     List<LlmTool>? tools,
   }) async* {
-    final reply =
-        await ask(agentId, message, context: context, tools: tools);
+    final reply = await ask(agentId, message, context: context, tools: tools);
     yield AgentToken(agentId: agentId, delta: reply.content, isFinal: true);
   }
 
@@ -309,12 +345,30 @@ class AgentRuntime {
     );
 
     final llm = _resolveLlmFor(manager.model);
+    final routeFactIds = <String>[];
     final response = await llm.complete(LlmRequest(
-      systemPrompt: manager.systemPrompt,
+      systemPrompt: await _systemPromptWithAxes(managerId, manager.systemPrompt,
+          factIds: routeFactIds),
       prompt: prompt,
       model: manager.model.model,
     ));
     final decision = _managerRouter.parseDecision(response.content);
+    await _recordOutput(AgentOutput(
+      workspaceId: manager.workspaceId,
+      flow: FlowStepRef.current,
+      kind: 'route',
+      agentId: managerId,
+      request: request,
+      content: jsonEncode(<String, Object?>{
+        'targetAgentId': decision.targetAgentId,
+        'confidence': decision.confidence,
+        if (decision.reason != null) 'reason': decision.reason,
+      }),
+      model: manager.model.model,
+      at: DateTime.now(),
+      lens: await _lensOf(managerId),
+      factIds: routeFactIds,
+    ));
 
     _eventBus.emit(ManagerRoutedEvent(
       managerId: managerId,
@@ -344,17 +398,67 @@ class AgentRuntime {
         actualRole: reviewer.role,
       );
     }
+    // The values the work is judged against: the reviewer may name the one
+    // at stake, so the feedback reaches that value (spec 30 §5.1).
+    final values = await _valuesOf(targetReply.agentId);
     final prompt = _reviewerEngine.buildPrompt(
       reviewer: reviewer,
       targetReply: targetReply,
+      values: values,
     );
     final llm = _resolveLlmFor(reviewer.model);
+    // The reviewer judges against what it was given — its facts, profile and
+    // philosophy — the same way an ask() composes them.
+    final reviewFactIds = <String>[];
     final response = await llm.complete(LlmRequest(
-      systemPrompt: reviewer.systemPrompt,
+      systemPrompt: await _systemPromptWithAxes(
+          reviewerId, reviewer.systemPrompt,
+          factIds: reviewFactIds),
       prompt: prompt,
       model: reviewer.model.model,
     ));
-    final result = _reviewerEngine.parseResult(response.content);
+    var result = _reviewerEngine.parseResult(response.content);
+    // Only a value the philosophy has can carry the feedback.
+    final chosen = result.valuePriorityId;
+    if (chosen != null && !values.any((v) => v.id == chosen)) {
+      result = ReviewResult(
+        verdict: result.verdict,
+        severity: result.severity,
+        comments: result.comments,
+      );
+    }
+    // A value is named only with how it was touched; "fell short" is the
+    // reading when the reviewer named a value and nothing else.
+    if (result.valuePriorityId != null && result.valueEffect == null) {
+      result = ReviewResult(
+        verdict: result.verdict,
+        severity: result.severity,
+        comments: result.comments,
+        valuePriorityId: result.valuePriorityId,
+        valueEffect: 'violated',
+      );
+    }
+    await _recordOutput(AgentOutput(
+      workspaceId: reviewer.workspaceId,
+      flow: FlowStepRef.current,
+      kind: 'review',
+      agentId: reviewerId,
+      request: targetReply.content,
+      content: jsonEncode(<String, Object?>{
+        'verdict': result.verdict.name,
+        if (result.severity != null) 'severity': result.severity!.name,
+        if (result.comments != null) 'comments': result.comments,
+        if (result.valuePriorityId != null) ...{
+          'valuePriorityId': result.valuePriorityId,
+          'valueEffect': result.valueEffect,
+        },
+      }),
+      model: reviewer.model.model,
+      at: DateTime.now(),
+      lens: await _lensOf(reviewerId),
+      factIds: reviewFactIds,
+      extra: <String, Object?>{'targetAgentId': targetReply.agentId},
+    ));
     _eventBus.emit(ReviewerVerifiedEvent(
       reviewerId: reviewerId,
       targetAgentId: targetReply.agentId,
@@ -390,16 +494,30 @@ class AgentRuntime {
   Future<void> _proposeFeedbackFromReview(
       String targetAgentId, ReviewResult result) async {
     try {
-      final refs = await _registry.listOwned(targetAgentId, AgentAxis.philosophy);
+      final refs =
+          await _registry.listOwned(targetAgentId, AgentAxis.philosophy);
       if (refs.isEmpty) return;
       final ks = _registry.knowledgeSystemRef();
       if (ks is! KnowledgeSystem || !ks.philosophy.isAvailable) return;
       final ethos = await ks.philosophy.getEthos();
-      final (outcome, score) = switch (result.verdict) {
-        ReviewVerdict.pass => (FeedbackOutcome.positive, 1.0),
-        ReviewVerdict.fail => (FeedbackOutcome.negative, 0.0),
-        ReviewVerdict.revise => (FeedbackOutcome.mixed, 0.5),
-      };
+      // The score runs from -1.0 to 1.0 (the feedback contract) and says how
+      // well *applying the value* went: negative weakens it, positive
+      // reinforces it. A work that fell short of a value did not apply it
+      // badly — it should count for more (positive); only following a value
+      // at too high a price is a case against it (negative).
+      final named = result.valuePriorityId != null;
+      final (outcome, score) = named && result.verdict != ReviewVerdict.revise
+          ? (result.valueEffect == 'overapplied'
+              ? (FeedbackOutcome.negative, -1.0)
+              : (FeedbackOutcome.positive, 1.0))
+          : switch (result.verdict) {
+              // No value named: a coarse signal about the philosophy as a
+              // whole. A failure must be negative — a score of 0 reads as no
+              // signal, so a run of failures would never move anything.
+              ReviewVerdict.pass => (FeedbackOutcome.positive, 1.0),
+              ReviewVerdict.fail => (FeedbackOutcome.negative, -1.0),
+              ReviewVerdict.revise => (FeedbackOutcome.mixed, 0.0),
+            };
       await ks.philosophy.proposeFeedback(FeedbackEvent(
         id: 'feedback/$targetAgentId/${DateTime.now().microsecondsSinceEpoch}',
         actionId: 'review:$targetAgentId',
@@ -407,6 +525,7 @@ class AgentRuntime {
         outcome: outcome,
         outcomeScore: score,
         outcomeDescription: 'reviewer verdict: ${result.verdict.name}',
+        valuePriorityId: result.valuePriorityId,
         occurredAt: DateTime.now(),
       ));
     } catch (_) {
@@ -447,7 +566,8 @@ class AgentRuntime {
   /// does not support `detectTensions`.
   Future<void> _detectForkTensions(String agentId) async {
     try {
-      final philoRefs = await _registry.listOwned(agentId, AgentAxis.philosophy);
+      final philoRefs =
+          await _registry.listOwned(agentId, AgentAxis.philosophy);
       if (philoRefs.isEmpty) return;
       final ks = _registry.knowledgeSystemRef();
       if (ks is! KnowledgeSystem || !ks.philosophy.isAvailable) return;
@@ -504,8 +624,8 @@ class AgentRuntime {
     var confidenceSum = 0.0;
     var confidenceN = 0;
     for (final ref in refs) {
-      final payload =
-          _ownedPayload(await _registry.getOwned(agentId, AgentAxis.facts, ref.forkedRef));
+      final payload = _ownedPayload(
+          await _registry.getOwned(agentId, AgentAxis.facts, ref.forkedRef));
       if (payload is! List) continue;
       for (final fact in payload) {
         count++;
@@ -566,7 +686,8 @@ class AgentRuntime {
   /// [AgentAxis.facts]; in-memory KV surfaces the live `OwnedFork`
   /// (payload = `List<FactRecord>`), persistent KV surfaces its JSON
   /// (`{'payload': [ {fact json} ]}`). Both are handled.
-  Future<String?> _composeAssignedFacts(String agentId) async {
+  Future<String?> _composeAssignedFacts(String agentId,
+      [List<String>? factIds]) async {
     final refs = await _registry.listOwned(agentId, AgentAxis.facts);
     if (refs.isEmpty) return null;
     final lines = <String>[];
@@ -577,7 +698,12 @@ class AgentRuntime {
       if (payload is! List) continue;
       for (final fact in payload) {
         final text = _factLine(fact);
-        if (text != null && text.isNotEmpty) lines.add('- $text');
+        if (text != null && text.isNotEmpty) {
+          lines.add('- $text');
+          final id =
+              fact is FactRecord ? fact.id : (fact is Map ? fact['id'] : null);
+          if (id is String && factIds != null) factIds.add(id);
+        }
         if (lines.length >= _maxComposedFacts) break;
       }
       if (lines.length >= _maxComposedFacts) break;
@@ -618,13 +744,75 @@ class AgentRuntime {
     return type != null && type.isNotEmpty ? '$type: $body' : body;
   }
 
+  /// The lens an agent works through: its forked profile, philosophy and
+  /// skill assets, by axis.
+  Future<Map<String, List<String>>> _lensOf(String agentId) async {
+    final out = <String, List<String>>{};
+    for (final axis in const [
+      AgentAxis.profile,
+      AgentAxis.philosophy,
+      AgentAxis.skill,
+    ]) {
+      final refs = await _registry.listOwned(agentId, axis);
+      if (refs.isNotEmpty) {
+        out[axis.name] = [for (final r in refs) r.forkedRef];
+      }
+    }
+    return out;
+  }
+
+  /// The value priorities of the philosophy [agentId] works under; empty
+  /// when it has none or the engine is not there.
+  Future<List<({String id, String text})>> _valuesOf(String agentId) async {
+    try {
+      final refs = await _registry.listOwned(agentId, AgentAxis.philosophy);
+      if (refs.isEmpty) return const [];
+      final ks = _registry.knowledgeSystemRef();
+      if (ks is! KnowledgeSystem || !ks.philosophy.isAvailable) return const [];
+      final ethos = await ks.philosophy.getEthos();
+      return [
+        for (final v in ethos.valuePriorities)
+          (id: v.id, text: '${v.higherValue} over ${v.lowerValue}'),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Puts an output down through the host's port. A failure is an event, not
+  /// an exception: the agent has already answered.
+  Future<void> _recordOutput(AgentOutput output) async {
+    final port = _outputPort;
+    if (port == null) return;
+    try {
+      await port.record(output);
+    } catch (e) {
+      _eventBus.emit(AgentOutputFailedEvent(
+        agentId: output.agentId,
+        kind: output.kind,
+        error: e.toString(),
+        timestamp: DateTime.now(),
+      ));
+    }
+  }
+
+  /// [base] followed by the agent's assigned axes; [base] alone when none
+  /// are assigned.
+  Future<String?> _systemPromptWithAxes(String agentId, String? base,
+      {List<String>? factIds}) async {
+    final assigned = await _composeAssignedAxes(agentId, factIds);
+    if (assigned == null) return base;
+    return base == null || base.isEmpty ? assigned : '$base\n\n$assigned';
+  }
+
   /// Max items rendered per non-facts axis (budget guard).
   static const int _maxComposedAxisItems = 20;
 
   /// Compose all 4 assigned axes into one system-prompt block, or null when
   /// none are assigned. Order: profile (persona) → philosophy (guardrails)
   /// → skill → facts. (spec 12 §2.)
-  Future<String?> _composeAssignedAxes(String agentId) async {
+  Future<String?> _composeAssignedAxes(String agentId,
+      [List<String>? factIds]) async {
     final sections = <String>[];
     final profile = await _composeAxis(
         agentId, AgentAxis.profile, 'Profile (persona / role)');
@@ -632,9 +820,10 @@ class AgentRuntime {
     final philosophy = await _composeAxis(agentId, AgentAxis.philosophy,
         'Operating philosophy (values · prohibitions)');
     if (philosophy != null) sections.add(philosophy);
-    final skill = await _composeAxis(agentId, AgentAxis.skill, 'Assigned skills');
+    final skill =
+        await _composeAxis(agentId, AgentAxis.skill, 'Assigned skills');
     if (skill != null) sections.add(skill);
-    final facts = await _composeAssignedFacts(agentId);
+    final facts = await _composeAssignedFacts(agentId, factIds);
     if (facts != null) sections.add(facts);
     if (sections.isEmpty) return null;
     return sections.join('\n\n');
@@ -676,9 +865,25 @@ class AgentRuntime {
     if (name is String && name.isNotEmpty) parts.add(name);
     if (desc is String && desc.isNotEmpty) parts.add(desc);
     if (values != null) parts.add('values: ${_compact(values)}');
-    if (prohibitions != null) parts.add('prohibitions: ${_compact(prohibitions)}');
-    if (parts.isEmpty) return _compact(map);
-    return parts.join(' — ');
+    if (prohibitions != null) {
+      parts.add('prohibitions: ${_compact(prohibitions)}');
+    }
+    // A profile states its persona in sections; the name and description
+    // alone would drop what the author wrote there.
+    final sections = map['sections'];
+    final sectionLines = <String>[
+      if (sections is List)
+        for (final s in sections)
+          if (s is Map &&
+              s['content'] is String &&
+              (s['content'] as String).isNotEmpty)
+            '${s['name'] is String && (s['name'] as String).isNotEmpty ? '${s['name']}: ' : ''}'
+                '${_clip(s['content'] as String)}',
+    ];
+    if (parts.isEmpty && sectionLines.isEmpty) return _compact(map);
+    return [parts.join(' — '), ...sectionLines]
+        .where((l) => l.isNotEmpty)
+        .join('\n  ');
   }
 
   /// Coerce a payload to a JSON map — directly if a `Map`, else via a
@@ -693,6 +898,10 @@ class AgentRuntime {
     }
     return null;
   }
+
+  /// A section's text, capped so one profile cannot fill the prompt.
+  String _clip(String text) =>
+      text.length > 800 ? '${text.substring(0, 800)}…' : text;
 
   /// Compact, length-capped JSON for embedding a value in a prompt line.
   String _compact(Object? value) {
@@ -745,8 +954,7 @@ class AgentRuntime {
     final messages = <LlmMessage>[];
     for (final turn in history) {
       messages.add(LlmMessage(role: 'user', content: turn.userMessage));
-      messages.add(
-          LlmMessage(role: 'assistant', content: turn.assistantReply));
+      messages.add(LlmMessage(role: 'assistant', content: turn.assistantReply));
     }
     final framedUser = context == null || context.isEmpty
         ? userMessage

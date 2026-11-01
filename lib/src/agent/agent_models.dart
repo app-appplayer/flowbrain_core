@@ -433,8 +433,8 @@ class Agent {
         id: json['id'] as String,
         displayName: json['displayName'] as String,
         role: AgentRole.values.byName(json['role'] as String),
-        model: ModelSpec.fromJson(
-            (json['model'] as Map).cast<String, Object?>()),
+        model:
+            ModelSpec.fromJson((json['model'] as Map).cast<String, Object?>()),
         workspaceId: json['workspaceId'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
         systemPrompt: json['systemPrompt'] as String?,
@@ -628,11 +628,21 @@ class ReviewResult {
     required this.verdict,
     this.severity,
     this.comments,
+    this.valuePriorityId,
+    this.valueEffect,
   });
 
   final ReviewVerdict verdict;
   final ReviewSeverity? severity;
   final String? comments;
+
+  /// The value priority the verdict turns on, when the reviewer named one.
+  final String? valuePriorityId;
+
+  /// How the verdict turns on that value: `violated` (the work fell short of
+  /// it — the value should count for more) or `overapplied` (following it
+  /// cost too much — it should count for less). Null with no value named.
+  final String? valueEffect;
 
   static const ReviewResult parseError = ReviewResult(
     verdict: ReviewVerdict.fail,
@@ -655,6 +665,14 @@ class ReviewResult {
         verdict: verdict,
         severity: severity,
         comments: decoded['comments'] as String?,
+        valuePriorityId: decoded['valuePriorityId'] is String &&
+                (decoded['valuePriorityId'] as String).isNotEmpty
+            ? decoded['valuePriorityId'] as String
+            : null,
+        valueEffect: const {'violated', 'overapplied'}
+                .contains(decoded['valueEffect'])
+            ? decoded['valueEffect'] as String
+            : null,
       );
     } catch (_) {
       return parseError;

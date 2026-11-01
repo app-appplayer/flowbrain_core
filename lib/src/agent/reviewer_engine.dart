@@ -18,8 +18,17 @@ class ReviewerEngine {
   String buildPrompt({
     required Agent reviewer,
     required AgentReply targetReply,
+    List<({String id, String text})> values = const [],
   }) {
     final systemPrompt = reviewer.systemPrompt ?? '';
+    final valueBlock = values.isEmpty
+        ? ''
+        : '''
+
+# Values the work answers to
+${values.map((v) => '- ${v.id}: ${v.text}').join('\n')}
+When a verdict turns on one of these, name it in "valuePriorityId" and say in "valueEffect" whether the work fell short of it ("violated") or following it cost too much ("overapplied").
+''';
     return '''
 $systemPrompt
 
@@ -30,9 +39,9 @@ agent: ${targetReply.agentId}
 model: ${targetReply.model}
 content:
 ${targetReply.content}
-
+$valueBlock
 # Output Format (strict JSON)
-{"verdict": "pass" | "fail" | "revise", "severity": "low" | "medium" | "high" | null, "comments": "..."}
+{"verdict": "pass" | "fail" | "revise", "severity": "low" | "medium" | "high" | null, "comments": "..."${values.isEmpty ? '' : ', "valuePriorityId": "<id from the list above or null>", "valueEffect": "violated" | "overapplied" | null'}}
 ''';
   }
 

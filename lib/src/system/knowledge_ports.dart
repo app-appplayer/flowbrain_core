@@ -8,6 +8,7 @@
 ///   - FR-FBCORE-INF-001..010
 library;
 
+import '../agent/agent_ports.dart';
 import 'package:mcp_bundle/mcp_bundle.dart';
 import 'package:mcp_knowledge/mcp_knowledge.dart' as kn;
 
@@ -129,6 +130,8 @@ class InfraPorts {
   InfraPorts({
     kn.KnowledgePorts? knowledgePorts,
     this.llmProviders,
+    this.agentContext,
+    this.agentOutputs,
   }) : _ports = knowledgePorts ?? const kn.KnowledgePorts();
 
   /// In-memory smoke wiring — `kvStorage` + `event` are populated. Other
@@ -149,6 +152,14 @@ class InfraPorts {
   /// Per-provider LLM pool (`Map<provider, LlmPort>`). Used by
   /// `AgentRuntime` — see FR-FBCORE-INF-008..010.
   final Map<String, LlmPort>? llmProviders;
+
+  /// What an agent reads from the host's knowledge store when it takes a
+  /// request (spec 30 §5.1). Null keeps agents as they were.
+  final AgentContextPort? agentContext;
+
+  /// Where an agent's answers, reviews and routing decisions are put down as
+  /// evidence (spec 30 §5.1). Null keeps agents as they were.
+  final AgentOutputPort? agentOutputs;
 
   /// Internal accessor used by the `KnowledgeSystem` wrapper to forward
   /// the underlying `KnowledgePorts` to the wrapped `mcp.KnowledgeSystem`.
@@ -186,6 +197,8 @@ class InfraPorts {
     EventPort? event,
     MetricPort? metric,
     EthosStorePort? ethosStore,
+    AgentContextPort? agentContext,
+    AgentOutputPort? agentOutputs,
   }) {
     final base = knowledgePorts ?? _ports;
     final updated = (llm != null ||
@@ -210,6 +223,8 @@ class InfraPorts {
     return InfraPorts(
       knowledgePorts: updated,
       llmProviders: llmProviders ?? this.llmProviders,
+      agentContext: agentContext ?? this.agentContext,
+      agentOutputs: agentOutputs ?? this.agentOutputs,
     );
   }
 }

@@ -42,6 +42,7 @@ export 'src/system/knowledge_ports.dart';
 // Agent Subsystem (100% flowbrain-native).
 // ============================================================================
 export 'src/agent/agent_facade.dart';
+export 'src/agent/agent_ports.dart';
 export 'src/agent/agent_registry.dart';
 export 'src/agent/agent_runtime.dart';
 export 'src/agent/conversation_store.dart';

@@ -89,8 +89,7 @@ class OwnedFork<T> {
   static OwnedFork<Object?> fromJson(Map<String, Object?> json) {
     final sourceStr = json['source'] as String? ?? '';
     final source = ForkSource.decode(sourceStr) ?? PoolForkSource(sourceStr);
-    final lineage =
-        (json['lineage'] as List?)?.cast<String>() ?? <String>[];
+    final lineage = (json['lineage'] as List?)?.cast<String>() ?? <String>[];
     return OwnedFork<Object?>(
       payload: json['payload'],
       source: source,
@@ -148,8 +147,7 @@ class LazyOwnedFork {
   static LazyOwnedFork fromJson(Map<String, Object?> json) {
     final sourceStr = json['source'] as String? ?? '';
     final source = ForkSource.decode(sourceStr) ?? PoolForkSource(sourceStr);
-    final lineage =
-        (json['lineage'] as List?)?.cast<String>() ?? <String>[];
+    final lineage = (json['lineage'] as List?)?.cast<String>() ?? <String>[];
     return LazyOwnedFork(
       source: source,
       lineage: lineage,
@@ -162,8 +160,7 @@ class LazyOwnedFork {
   /// Detect a persistent-JSON form of [LazyOwnedFork] by the `lazy` flag
   /// (since persistent adapters typically round-trip envelopes through
   /// `Map<String, Object?>`).
-  static bool isLazyJson(Object? raw) =>
-      raw is Map && raw['lazy'] == true;
+  static bool isLazyJson(Object? raw) => raw is Map && raw['lazy'] == true;
 }
 
 /// Performs the fork operation for each of the four axes.
@@ -347,8 +344,7 @@ class ForkEngine {
         return raw.payload as Object;
       }
       if (raw is Map) {
-        final envelope =
-            OwnedFork.fromJson(Map<String, Object?>.from(raw));
+        final envelope = OwnedFork.fromJson(Map<String, Object?>.from(raw));
         final p = envelope.payload;
         if (p == null) {
           throw StateError(
@@ -524,8 +520,7 @@ class ForkEngine {
   ) async {
     final raw = await _registry.getOwned(agentId, axis, forkedRef);
     if (raw == null) {
-      throw StateError(
-          'materialize: no owned record at agent=$agentId '
+      throw StateError('materialize: no owned record at agent=$agentId '
           'axis=${axis.name} forkedRef=$forkedRef');
     }
     LazyOwnedFork lazy;

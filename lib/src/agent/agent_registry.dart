@@ -117,16 +117,14 @@ class AgentRegistry {
       if (!key.endsWith('/$agentId')) continue;
       final raw = await _kv.get(key);
       if (raw is String) {
-        return Agent.fromJson(
-            (jsonDecode(raw) as Map).cast<String, Object?>());
+        return Agent.fromJson((jsonDecode(raw) as Map).cast<String, Object?>());
       }
     }
     return null;
   }
 
   Future<List<Agent>> list({String? role, String? workspaceId}) async {
-    final prefix =
-        workspaceId != null ? 'agent/$workspaceId/' : 'agent/';
+    final prefix = workspaceId != null ? 'agent/$workspaceId/' : 'agent/';
     final keys = await _kv.keys(prefix: prefix);
     final agents = <Agent>[];
     for (final key in keys) {
@@ -135,8 +133,8 @@ class AgentRegistry {
       final raw = await _kv.get(key);
       if (raw is! String) continue;
       try {
-        final agent = Agent.fromJson(
-            (jsonDecode(raw) as Map).cast<String, Object?>());
+        final agent =
+            Agent.fromJson((jsonDecode(raw) as Map).cast<String, Object?>());
         if (role != null && agent.role.name != role) continue;
         agents.add(agent);
       } catch (e) {
@@ -170,8 +168,8 @@ class AgentRegistry {
       systemPrompt: systemPrompt,
       tags: tags,
     );
-    await _kv.set(_agentKey(current.workspaceId, agentId),
-        jsonEncode(next.toJson()));
+    await _kv.set(
+        _agentKey(current.workspaceId, agentId), jsonEncode(next.toJson()));
     return next;
   }
 
@@ -187,8 +185,7 @@ class AgentRegistry {
       final indexRaw = await _kv.get(_indexKey(agentId, axis));
       if (indexRaw is String) {
         try {
-          final entries =
-              (jsonDecode(indexRaw) as Map).cast<String, String>();
+          final entries = (jsonDecode(indexRaw) as Map).cast<String, String>();
           for (final forkedRef in entries.values) {
             await _kv.remove(_ownedKey(axis, agentId, forkedRef));
           }

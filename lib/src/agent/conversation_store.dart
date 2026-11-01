@@ -73,8 +73,8 @@ class ConversationStore {
     if (cap > 0 && turns.length > cap) {
       // Preserve a leading summary placeholder so callers always see the
       // compressed-history marker when one is present.
-      final hasSummary = turns.isNotEmpty &&
-          turns.first.userMessage == '<compressed-history>';
+      final hasSummary =
+          turns.isNotEmpty && turns.first.userMessage == '<compressed-history>';
       if (hasSummary && cap >= 1) {
         final tailCount = cap - 1;
         return [turns.first, ...turns.sublist(turns.length - tailCount)];
@@ -91,9 +91,8 @@ class ConversationStore {
       final existing = await load(agentId, limit: -1);
       final next = [...existing, turn];
       final cap = _config.maxConversationTurns;
-      final compacted = (cap > 0 && next.length > cap)
-          ? _compressOldest(next, cap)
-          : next;
+      final compacted =
+          (cap > 0 && next.length > cap) ? _compressOldest(next, cap) : next;
       await _kv.set(_turnsKey(agentId),
           jsonEncode(compacted.map((t) => t.toJson()).toList()));
       await _kv.set(_lastAtKey(agentId), turn.timestamp.toIso8601String());
@@ -127,8 +126,8 @@ class ConversationStore {
     _closed = true;
   }
 
-/// Force a TTL sweep immediately. Visible for tests — production code
-/// relies on the periodic timer.
+  /// Force a TTL sweep immediately. Visible for tests — production code
+  /// relies on the periodic timer.
   Future<void> debugSweepNow() => _sweepExpired();
 
   // ── Internal ────────────────────────────────────────────────────────────

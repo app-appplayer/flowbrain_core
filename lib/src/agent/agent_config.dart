@@ -76,15 +76,12 @@ class AgentConfig {
       AgentConfig(
         defaultModel: defaultModel ?? this.defaultModel,
         conversationTtl: conversationTtl ?? this.conversationTtl,
-        maxConversationTurns:
-            maxConversationTurns ?? this.maxConversationTurns,
+        maxConversationTurns: maxConversationTurns ?? this.maxConversationTurns,
         forkPolicy: forkPolicy ?? this.forkPolicy,
         maxAgentsPerWorkspace:
             maxAgentsPerWorkspace ?? this.maxAgentsPerWorkspace,
-        enableGrowthTracking:
-            enableGrowthTracking ?? this.enableGrowthTracking,
-        enableManagerRouting:
-            enableManagerRouting ?? this.enableManagerRouting,
+        enableGrowthTracking: enableGrowthTracking ?? this.enableGrowthTracking,
+        enableManagerRouting: enableManagerRouting ?? this.enableManagerRouting,
         enableReviewer: enableReviewer ?? this.enableReviewer,
         recordLifecycleAsFacts:
             recordLifecycleAsFacts ?? this.recordLifecycleAsFacts,

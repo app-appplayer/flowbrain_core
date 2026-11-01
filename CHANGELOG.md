@@ -1,3 +1,18 @@
+## 0.1.10 - 2026-11-01 - Agent context and output ports, review score scale (additive)
+
+### Added
+- `AgentContextPort` / `AgentContext` and `AgentOutputPort` / `AgentOutput`, wired through `InfraPorts.agentContext` and `InfraPorts.agentOutputs`: a host can hand an agent what it has recorded before a request (read side) and take what the agent produced (write side). `FlowStepRef` says which step of a flow a record came from; `AgentOutputFailedEvent` reports a write that failed. Without the ports an agent behaves as before.
+- `AgentFacade.ask` takes optional `asOf` and `recordExtra`.
+- `ReviewResult` carries `valuePriorityId` and `valueEffect` (how the review touched a value).
+
+### Changed
+- Review feedback scores follow the contract scale: pass +1, revise 0, fail -1 (they were 1, 0.5 and 0). Only philosophy evolution reads them.
+- The manager (route) and reviewer (review) prompts carry the axes assigned to the agent, as the worker prompt does. With none assigned the prompt is exactly the agent's own.
+- `mcp_knowledge` `^0.2.6` → `^0.2.7`.
+
+### Backward compatibility
+- Additive. `dart-apitool` against 0.1.9: no breaking changes.
+
 ## 0.1.9 - 2026-10-31 - Durable fact graph seam and philosophy evolution on (additive)
 
 ### Added

@@ -261,6 +261,8 @@ class AgentFacade {
     Map<String, Object?>? context,
     List<LlmTool>? tools,
     bool resetContext = false,
+    DateTime? asOf,
+    Map<String, Object?>? recordExtra,
   }) {
     _requireActivated();
     return _runtime!.ask(
@@ -269,6 +271,8 @@ class AgentFacade {
       context: context,
       tools: tools,
       resetContext: resetContext,
+      asOf: asOf,
+      recordExtra: recordExtra,
     );
   }
 
@@ -279,8 +283,7 @@ class AgentFacade {
     List<LlmTool>? tools,
   }) {
     _requireActivated();
-    return _runtime!
-        .stream(agentId, message, context: context, tools: tools);
+    return _runtime!.stream(agentId, message, context: context, tools: tools);
   }
 
   Future<List<ConversationTurn>> getHistory(

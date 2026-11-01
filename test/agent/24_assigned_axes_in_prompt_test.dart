@@ -16,7 +16,9 @@ import 'package:mcp_bundle/mcp_bundle.dart'
         Tension,
         TensionSource,
         TensionSeverity,
-        TensionLayer;
+        TensionLayer,
+        FeedbackEvent,
+        EvolutionProposal;
 import 'package:test/test.dart';
 
 /// Captures the system prompt the provider actually receives.
@@ -72,6 +74,27 @@ InfraPorts _infraWithTension() => InfraPorts(
           KnowledgePorts.stub().copyWith(philosophy: _TensionPhilosophy()),
     );
 
+/// Records the feedback events a review hands to the philosophy.
+class _FeedbackPhilosophy extends StubPhilosophyPort {
+  final List<FeedbackEvent> events = <FeedbackEvent>[];
+
+  @override
+  Future<EvolutionProposal?> proposeFeedback(FeedbackEvent event) async {
+    events.add(event);
+    return null;
+  }
+}
+
+/// A reviewer model that answers with a fixed verdict.
+class _VerdictLlm extends StubLlmPort {
+  _VerdictLlm(this.verdict);
+  final String verdict;
+
+  @override
+  Future<LlmResponse> complete(LlmRequest request) async => LlmResponse(
+      content: '{"verdict": "$verdict", "severity": "low", "comments": "c"}');
+}
+
 void main() {
   group('assigned non-facts axes → ask systemPrompt', () {
     test('assigned profile composes into the prompt (4-axis)', () async {
@@ -104,6 +127,172 @@ void main() {
       expect(cap.captured, contains('You are an editor.')); // base preserved
       expect(cap.captured, contains('Profile (persona / role)')); // axis label
       expect(cap.captured, contains('Editor')); // profile content rendered
+    });
+
+    test('a profile\'s section text reaches the prompt, not just its name',
+        () async {
+      final cap = _CapturingLlm();
+      final profileRegistry = ProfileRegistry();
+      final system = KnowledgeSystem.withAgents(
+        profileRuntime: ProfileRuntime(
+          registry: profileRegistry,
+          engines: EnginePorts.stub(),
+        ),
+        llmProviders: <String, LlmPort>{'cap': cap},
+      );
+      profileRegistry.register(Profile.fromJson(<String, dynamic>{
+        'id': 'voiced',
+        'name': 'Voiced',
+        'sections': [
+          {'id': 's1', 'name': 'voice', 'content': 'Begin every answer with OK:'},
+        ],
+      }));
+      await system.agents.createAgent(
+        id: 'v',
+        displayName: 'V',
+        model: const ModelSpec(provider: 'cap', model: 'x'),
+        workspaceId: 'w1',
+      );
+      await system.agents.assignProfileFromPool('v', 'voiced');
+      await system.agents.ask('v', 'go');
+
+      expect(cap.captured, contains('voice: Begin every answer with OK:'));
+    });
+
+    test('a reviewer is given its assigned profile in the review prompt',
+        () async {
+      final cap = _CapturingLlm();
+      final profileRegistry = ProfileRegistry();
+      final system = KnowledgeSystem.withAgents(
+        profileRuntime: ProfileRuntime(
+          registry: profileRegistry,
+          engines: EnginePorts.stub(),
+        ),
+        llmProviders: <String, LlmPort>{'cap': cap},
+      );
+      profileRegistry.register(Profile.fromJson(<String, dynamic>{
+        'id': 'strict',
+        'name': 'Strict',
+        'sections': [
+          {'id': 's1', 'name': 'bar', 'content': 'Fail anything without a source.'},
+        ],
+      }));
+      await system.agents.createAgent(
+        id: 'rv',
+        displayName: 'Rv',
+        role: AgentRole.reviewer,
+        model: const ModelSpec(provider: 'cap', model: 'x'),
+        workspaceId: 'w1',
+        systemPrompt: 'You review.',
+      );
+      await system.agents.assignProfileFromPool('rv', 'strict');
+      await system.agents.review(
+        'rv',
+        AgentReply(
+          id: 'r1',
+          agentId: 'other',
+          content: 'a claim',
+          model: 'x',
+          timestamp: DateTime.now(),
+        ),
+      );
+
+      expect(cap.captured, contains('You review.'));
+      expect(cap.captured, contains('bar: Fail anything without a source.'));
+    });
+
+    test('a reviewer with nothing assigned is given exactly its own prompt',
+        () async {
+      final cap = _CapturingLlm();
+      final system = KnowledgeSystem.withAgents(
+        llmProviders: <String, LlmPort>{'cap': cap},
+      );
+      await system.agents.createAgent(
+        id: 'rv',
+        displayName: 'Rv',
+        role: AgentRole.reviewer,
+        model: const ModelSpec(provider: 'cap', model: 'x'),
+        workspaceId: 'w1',
+        systemPrompt: 'You review.',
+      );
+      await system.agents.review(
+        'rv',
+        AgentReply(
+          id: 'r1',
+          agentId: 'other',
+          content: 'a claim',
+          model: 'x',
+          timestamp: DateTime.now(),
+        ),
+      );
+      expect(cap.captured, 'You review.');
+    });
+
+    test('a manager with nothing assigned is given exactly its own prompt',
+        () async {
+      final cap = _CapturingLlm();
+      final system = KnowledgeSystem.withAgents(
+        llmProviders: <String, LlmPort>{'cap': cap},
+      );
+      await system.agents.createAgent(
+        id: 'mgr',
+        displayName: 'Mgr',
+        role: AgentRole.manager,
+        model: const ModelSpec(provider: 'cap', model: 'x'),
+        workspaceId: 'w1',
+        systemPrompt: 'You route.',
+      );
+      await system.agents.createAgent(
+        id: 'w',
+        displayName: 'W',
+        role: AgentRole.worker,
+        model: const ModelSpec(provider: 'cap', model: 'x'),
+        workspaceId: 'w1',
+      );
+      await system.agents.route('mgr', 'do the thing', candidateAgentIds: ['w']);
+      expect(cap.captured, 'You route.');
+    });
+
+    test('a review verdict reaches the philosophy on the -1..1 scale, a failure '
+        'negative', () async {
+      final philosophy = _FeedbackPhilosophy();
+      final scores = <String, double>{};
+      for (final verdict in ['pass', 'revise', 'fail']) {
+        final system = KnowledgeSystem.withAgents(
+          config: KnowledgeConfig.withPhilosophyEvolution,
+          infraPorts: InfraPorts(
+            knowledgePorts:
+                KnowledgePorts.stub().copyWith(philosophy: philosophy),
+          ),
+          llmProviders: <String, LlmPort>{'v': _VerdictLlm(verdict)},
+        );
+        await system.agents.createAgent(
+          id: 'rev',
+          displayName: 'Rev',
+          role: AgentRole.reviewer,
+          model: const ModelSpec(provider: 'v', model: 'x'),
+          workspaceId: 'w1',
+        );
+        await system.agents.createAgent(
+          id: 'coder',
+          displayName: 'Coder',
+          model: ModelSpec.stub(),
+          workspaceId: 'w1',
+        );
+        await system.agents.assignPhilosophyFromPool('coder', 'e1');
+        await system.agents.review(
+          'rev',
+          AgentReply(
+            id: '',
+            agentId: 'coder',
+            content: 'work',
+            model: 'x',
+            timestamp: DateTime.now(),
+          ),
+        );
+        scores[verdict] = philosophy.events.last.outcomeScore;
+      }
+      expect(scores, {'pass': 1.0, 'revise': 0.0, 'fail': -1.0});
     });
 
     test('assigned philosophy blocks a prohibited output at work-time (§3)',

@@ -47,8 +47,7 @@ class ConversationStoreUnavailableException implements Exception {
   const ConversationStoreUnavailableException(this.detail);
   final String detail;
   @override
-  String toString() =>
-      'ConversationStoreUnavailableException: $detail '
+  String toString() => 'ConversationStoreUnavailableException: $detail '
       '(wire `KvStoragePort` via InfraPorts.copyWith(kvStorage: adapter) '
       'or use InfraPorts.inMemory() for tests)';
 }

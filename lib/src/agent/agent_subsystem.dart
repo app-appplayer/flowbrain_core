@@ -67,6 +67,8 @@ class AgentSubsystem {
       eventBus: eventBus,
       defaultLlm: infraPorts.llm,
       llmProviders: infraPorts.llmProviders,
+      contextPort: infraPorts.agentContext,
+      outputPort: infraPorts.agentOutputs,
     );
     return AgentSubsystem._(registry: registry, runtime: runtime);
   }
